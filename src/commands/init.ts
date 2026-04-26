@@ -27,13 +27,35 @@ function parseGitRemote(remote: string): { owner: string; repo: string } | null 
   return null
 }
 
+let sharedRl: readline.Interface | null = null
+const lineBuffer: string[] = []
+const lineWaiters: Array<(line: string) => void> = []
+
+function ensureRl(): void {
+  if (sharedRl) return
+  sharedRl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  sharedRl.on('line', (line) => {
+    const waiter = lineWaiters.shift()
+    if (waiter) waiter(line)
+    else lineBuffer.push(line)
+  })
+}
+
+function closeRl(): void {
+  sharedRl?.close()
+  sharedRl = null
+}
+
 function prompt(question: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  ensureRl()
+  process.stdout.write(question)
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close()
-      resolve(answer.trim())
-    })
+    const buffered = lineBuffer.shift()
+    if (buffered !== undefined) {
+      resolve(buffered.trim())
+    } else {
+      lineWaiters.push((line) => resolve(line.trim()))
+    }
   })
 }
 
@@ -67,6 +89,14 @@ function simpleDiff(label: string, oldContent: string | null, newContent: string
 }
 
 export async function runInit() {
+  try {
+    await runInitInner()
+  } finally {
+    closeRl()
+  }
+}
+
+async function runInitInner() {
   const creds = requireCredentials()
   const cwd = process.cwd()
 

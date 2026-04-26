@@ -1,6 +1,7 @@
 import http from 'http'
 import net from 'net'
 import os from 'os'
+import { spawn } from 'child_process'
 import { randomBytes } from 'crypto'
 import { writeCredentials } from '../lib/credentials'
 import { apiCall, getWebUrl, ApiError } from '../lib/api'
@@ -35,6 +36,19 @@ function getRandomPort(): Promise<number> {
     })
     srv.on('error', reject)
   })
+}
+
+function openBrowser(url: string): void {
+  const platform = process.platform
+  const cmd = platform === 'darwin' ? 'open'
+    : platform === 'win32' ? 'cmd'
+    : 'xdg-open'
+  const args = platform === 'win32' ? ['/c', 'start', '', url] : [url]
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+  child.on('error', (err) => {
+    console.error(`(could not auto-open browser: ${err.message})`)
+  })
+  child.unref()
 }
 
 async function browserLogin(): Promise<TokenFields> {
@@ -91,10 +105,9 @@ async function browserLogin(): Promise<TokenFields> {
       console.log(`If the browser does not open, visit: ${url}`)
 
       try {
-        const { default: open } = await import('open')
-        await open(url)
-      } catch {
-        // browser open failed — user must visit URL manually
+        openBrowser(url)
+      } catch (err) {
+        console.error(`(could not auto-open browser: ${err instanceof Error ? err.message : String(err)})`)
       }
     })
 

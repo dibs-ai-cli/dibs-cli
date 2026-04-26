@@ -67,42 +67,6 @@ program
     await runSessionStart()
   })
 
-const configCmd = program
-  .command('config')
-  .description('Manage CLI configuration stored in ~/.dibs/config.json')
-
-configCmd
-  .command('get [key]')
-  .description('Print effective config (or a single key) with its source')
-  .action(async (key?: string) => {
-    const { runConfigGet } = await import('./commands/config')
-    runConfigGet(key)
-  })
-
-configCmd
-  .command('set <key> <value>')
-  .description('Set a config value (apiUrl, webUrl)')
-  .action(async (key: string, value: string) => {
-    const { runConfigSet } = await import('./commands/config')
-    runConfigSet(key, value)
-  })
-
-configCmd
-  .command('unset <key>')
-  .description('Remove a config key')
-  .action(async (key: string) => {
-    const { runConfigUnset } = await import('./commands/config')
-    runConfigUnset(key)
-  })
-
-configCmd
-  .command('path')
-  .description('Print the path to the config file')
-  .action(async () => {
-    const { runConfigPath } = await import('./commands/config')
-    runConfigPath()
-  })
-
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err))
   process.exit(1)

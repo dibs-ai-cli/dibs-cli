@@ -1,0 +1,31 @@
+{
+  "name": "@dibsai/cli",
+  "version": "0.0.1",
+  "description": "CLI for dibs — coordinate work between AI agents in a shared codebase",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "dibs": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^12.1.0",
+    "kleur": "^4.1.5",
+    "open": "^10.1.0",
+    "zod": "^3.23.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "tsx": "^4.7.3",
+    "typescript": "^5.4.5"
+  },
+  "files": [
+    "dist"
+  ]
+}

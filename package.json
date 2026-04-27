@@ -2,16 +2,39 @@
   "name": "@dibsai/cli",
   "version": "0.0.1",
   "description": "CLI for dibs — coordinate work between AI agents in a shared codebase",
+  "license": "UNLICENSED",
+  "author": "Jared Hammond <jared@jaredhammond.me>",
+  "homepage": "https://github.com/JaredHammond/dibs#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JaredHammond/dibs.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/JaredHammond/dibs/issues"
+  },
+  "keywords": [
+    "dibs",
+    "cli",
+    "ai-agents",
+    "claude-code",
+    "mcp",
+    "coordination"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "dibs": "dist/index.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "tsc"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -26,5 +49,8 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

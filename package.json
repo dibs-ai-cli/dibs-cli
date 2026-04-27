@@ -2,7 +2,7 @@
   "name": "@dibsai/cli",
   "version": "0.0.1",
   "description": "CLI for dibs — coordinate work between AI agents in a shared codebase",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "author": "Jared Hammond <jared@jaredhammond.me>",
   "homepage": "https://github.com/JaredHammond/dibs#readme",
   "repository": {

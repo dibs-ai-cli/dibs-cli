@@ -5,19 +5,16 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { randomBytes } from 'crypto'
-import os from 'os'
 import { requireCredentials } from '../lib/credentials'
 import { requireProject } from '../lib/project'
 import { makeProjectApi, ApiError } from '../lib/api'
+import { resolveAgentName } from '../lib/agent-name'
 
 export function runMcp() {
   const creds = requireCredentials()
   const proj = requireProject()
 
-  const agentName =
-    process.env.DIBS_AGENT_NAME ??
-    `${process.env.USER ?? process.env.USERNAME ?? 'agent'}@${os.hostname()}-${randomBytes(3).toString('hex')}`
+  const agentName = resolveAgentName()
 
   const api = makeProjectApi(proj.projectId, creds.token, agentName)
 

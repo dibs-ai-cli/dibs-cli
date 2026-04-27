@@ -67,6 +67,14 @@ program
     await runSessionStart()
   })
 
+program
+  .command('sync')
+  .description('Print unread messages and active claims as a context block (run as a Claude Code UserPromptSubmit hook)')
+  .action(async () => {
+    const { runSync } = await import('./commands/sync')
+    await runSync()
+  })
+
 program.parseAsync(process.argv).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err))
   process.exit(1)

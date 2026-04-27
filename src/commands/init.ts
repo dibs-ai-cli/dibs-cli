@@ -192,7 +192,25 @@ async function runInitInner() {
     ? fs.readFileSync(projectJsonPath, 'utf8')
     : null
 
-  // .claude/settings.local.json
+  // .mcp.json — project-scope MCP server config (committed)
+  const mcpJsonPath = path.join(cwd, '.mcp.json')
+  let existingMcp: Record<string, unknown> = {}
+  const existingMcpRaw = fs.existsSync(mcpJsonPath)
+    ? fs.readFileSync(mcpJsonPath, 'utf8')
+    : null
+  if (existingMcpRaw) {
+    try {
+      existingMcp = JSON.parse(existingMcpRaw) as Record<string, unknown>
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+  const mcpServers = ((existingMcp.mcpServers ?? {}) as Record<string, unknown>)
+  mcpServers['dibs'] = { type: 'stdio', command: 'dibs', args: ['mcp'] }
+  const mergedMcp = { ...existingMcp, mcpServers }
+  const mcpJsonContent = JSON.stringify(mergedMcp, null, 2) + '\n'
+
+  // .claude/settings.local.json — hooks only (gitignored, per-machine)
   const claudeDir = path.join(cwd, '.claude')
   const settingsPath = path.join(claudeDir, 'settings.local.json')
   let existingSettings: Record<string, unknown> = {}
@@ -207,23 +225,22 @@ async function runInitInner() {
     }
   }
 
-  const mcpServers = ((existingSettings.mcpServers ?? {}) as Record<string, unknown>)
-  mcpServers['dibs'] = { command: 'dibs', args: ['mcp'] }
-
   const hooks = ((existingSettings.hooks ?? {}) as Record<string, unknown>)
-  const sessionStartHooks = (Array.isArray(hooks['SessionStart']) ? hooks['SessionStart'] : []) as Array<Record<string, unknown>>
-  const dibsHookIndex = sessionStartHooks.findIndex((h) => h['_dibs'] === true)
-  const dibsHook = { command: 'dibs session-start', _dibs: true }
-  if (dibsHookIndex >= 0) {
-    sessionStartHooks[dibsHookIndex] = dibsHook
-  } else {
-    sessionStartHooks.push(dibsHook)
+
+  function upsertDibsHook(eventName: string, command: string) {
+    const list = (Array.isArray(hooks[eventName]) ? hooks[eventName] : []) as Array<Record<string, unknown>>
+    const idx = list.findIndex((h) => h['_dibs'] === true)
+    const entry = { _dibs: true, hooks: [{ type: 'command', command }] }
+    if (idx >= 0) list[idx] = entry
+    else list.push(entry)
+    hooks[eventName] = list
   }
-  hooks['SessionStart'] = sessionStartHooks
+
+  upsertDibsHook('SessionStart', 'dibs session-start')
+  upsertDibsHook('UserPromptSubmit', 'dibs sync')
 
   const mergedSettings = {
     ...existingSettings,
-    mcpServers,
     hooks,
   }
   const settingsContent = JSON.stringify(mergedSettings, null, 2) + '\n'
@@ -248,6 +265,9 @@ async function runInitInner() {
 
   const projectJsonDiff = simpleDiff('.dibs/project.json', existingProjectJson, projectJsonContent)
   if (projectJsonDiff) diffs.push(projectJsonDiff)
+
+  const mcpJsonDiff = simpleDiff('.mcp.json', existingMcpRaw, mcpJsonContent)
+  if (mcpJsonDiff) diffs.push(mcpJsonDiff)
 
   const settingsDiff = simpleDiff('.claude/settings.local.json', existingSettingsRaw, settingsContent)
   if (settingsDiff) diffs.push(settingsDiff)
@@ -275,6 +295,8 @@ async function runInitInner() {
   // 5. Write files
   if (!fs.existsSync(dibsDir)) fs.mkdirSync(dibsDir, { recursive: true })
   fs.writeFileSync(projectJsonPath, projectJsonContent, 'utf8')
+
+  fs.writeFileSync(mcpJsonPath, mcpJsonContent, 'utf8')
 
   if (!fs.existsSync(claudeDir)) fs.mkdirSync(claudeDir, { recursive: true })
   fs.writeFileSync(settingsPath, settingsContent, 'utf8')

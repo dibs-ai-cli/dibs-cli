@@ -1,6 +1,6 @@
 {
   "name": "@dibsai/cli",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "CLI for dibs — coordinate work between AI agents in a shared codebase",
   "license": "MIT",
   "author": "Jared Hammond <jared@jaredhammond.me>",

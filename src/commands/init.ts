@@ -206,7 +206,25 @@ async function runInitInner() {
     }
   }
   const mcpServers = ((existingMcp.mcpServers ?? {}) as Record<string, unknown>)
-  mcpServers['dibs'] = { type: 'stdio', command: 'dibs', args: ['mcp'] }
+  const existingDibs = (mcpServers['dibs'] as Record<string, unknown>) ?? {}
+  // Merge so user-added fields (e.g. env vars) survive re-runs of dibs init.
+  // Fields we own (type, command, args, autoApprove) are always overwritten to stay current.
+  mcpServers['dibs'] = {
+    ...existingDibs,
+    type: 'stdio',
+    command: 'dibs',
+    args: ['mcp'],
+    autoApprove: [
+      'register_agent',
+      'get_claims',
+      'create_claim',
+      'update_claim',
+      'release_claim',
+      'send_message',
+      'get_messages',
+      'mark_read',
+    ],
+  }
   const mergedMcp = { ...existingMcp, mcpServers }
   const mcpJsonContent = JSON.stringify(mergedMcp, null, 2) + '\n'
 

@@ -2,34 +2,7 @@ import { readCredentials } from '../lib/credentials'
 import { findProject } from '../lib/project'
 import { apiCall } from '../lib/api'
 import { resolveAgentName } from '../lib/agent-name'
-
-interface SyncMessage {
-  id: string
-  body: string
-  targetType: 'AGENT' | 'USER' | 'BROADCAST'
-  createdAt: string
-  senderAgent?: { name: string } | null
-  senderUser?: { githubLogin: string } | null
-  claim?: { id: string; title: string; type: string; paths: string[] } | null
-}
-
-interface SyncClaim {
-  id: string
-  type: 'FILE' | 'IDEA'
-  title: string
-  paths: string[]
-  status: string
-  updatedAt: string
-  agent?: { name: string } | null
-}
-
-interface SyncResponse {
-  messages: SyncMessage[]
-  claims: SyncClaim[]
-  unread: number
-  activeClaimsTotal: number
-  truncated: boolean
-}
+import { readCache, isFresh, type SyncData } from '../lib/cache'
 
 function formatRelative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -42,7 +15,7 @@ function formatRelative(iso: string): string {
   return `${d}d ago`
 }
 
-function formatSender(msg: SyncMessage): string {
+function formatSender(msg: SyncData['messages'][number]): string {
   return msg.senderAgent?.name ?? msg.senderUser?.githubLogin ?? 'unknown'
 }
 
@@ -53,16 +26,21 @@ export async function runSync() {
   const proj = findProject()
   if (!proj) return
 
-  let data: SyncResponse
-  try {
-    data = await apiCall<SyncResponse>(
-      'GET',
-      `/projects/${proj.projectId}/sync`,
-      undefined,
-      { token: creds.token, agentName: resolveAgentName() }
-    )
-  } catch {
-    return
+  let data: SyncData
+  const cached = readCache(proj.projectId)
+  if (cached && isFresh(cached)) {
+    data = cached.data
+  } else {
+    try {
+      data = await apiCall<SyncData>(
+        'GET',
+        `/projects/${proj.projectId}/sync`,
+        undefined,
+        { token: creds.token, agentName: resolveAgentName() }
+      )
+    } catch {
+      return
+    }
   }
 
   const hasMessages = data.messages.length > 0

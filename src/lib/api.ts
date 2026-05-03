@@ -1,5 +1,6 @@
 import { readCredentials } from './credentials'
 import { getApiUrl } from './config'
+import { CLI_VERSION } from './version'
 
 export { getWebUrl } from './config'
 
@@ -8,6 +9,15 @@ export class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+// Populated from response headers on every API call.
+// Read by getVersionHints() in the MCP server after the first request.
+let _latestVersion: string | null = null
+let _minVersion: string | null = null
+
+export function getVersionHints(): { latest: string | null; min: string | null } {
+  return { latest: _latestVersion, min: _minVersion }
 }
 
 export async function apiCall<T = unknown>(
@@ -21,6 +31,7 @@ export async function apiCall<T = unknown>(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'X-Dibs-CLI-Version': CLI_VERSION,
   }
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
@@ -34,6 +45,12 @@ export async function apiCall<T = unknown>(
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+
+  // Capture version hints from every response so the MCP server can warn once.
+  const latest = res.headers.get('X-Dibs-Latest-Version')
+  const min = res.headers.get('X-Dibs-Min-Version')
+  if (latest) _latestVersion = latest
+  if (min) _minVersion = min
 
   if (!res.ok) {
     const text = await res.text()
@@ -98,5 +115,7 @@ export function makeProjectApi(
       apiCall('GET', `${projectBase}/messages/${messageId}/thread`, undefined, opts),
     markRead: (messageIds: string[]) =>
       apiCall('POST', `${projectBase}/messages/mark-read`, { messageIds }, opts),
+
+    getSync: () => apiCall('GET', `${projectBase}/sync`, undefined, opts),
   }
 }

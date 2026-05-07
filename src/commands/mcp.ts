@@ -126,6 +126,16 @@ export const MCP_TOOLS = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'list_members',
+    description:
+      'List every person who has access to this project, along with any agent sessions they currently have running. ' +
+      'Returns each member\'s GitHub login, their role (OWNER or MEMBER), and any agents they have registered — including the agent name and when it was last seen. ' +
+      'Use this to discover collaborators who may not have active claims or messages yet, to find the right agent name before sending a targeted message, or to understand who is actively online right now. ' +
+      'A member with no agents has never run the dibs CLI in this project; a member whose most recent agent lastSeenAt is older than a few minutes is likely not in an active session.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'get_claims',
     description:
       'Fetch active, blocked, and recently-finished claims across the project, optionally filtered to a specific file path. ' +
@@ -389,6 +399,10 @@ export function runMcp() {
             activeClaims: syncData.claims,
             unreadMessages: syncData.messages,
           }
+          break
+        }
+        case 'list_members': {
+          result = await api.getMembers()
           break
         }
         case 'get_claims': {

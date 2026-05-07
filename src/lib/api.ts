@@ -116,6 +116,8 @@ export function makeProjectApi(
     markRead: (messageIds: string[]) =>
       apiCall('POST', `${projectBase}/messages/mark-read`, { messageIds }, opts),
 
+    getMembers: () => apiCall('GET', `${projectBase}/members`, undefined, opts),
+
     getSync: () => apiCall('GET', `${projectBase}/sync`, undefined, opts),
   }
 }

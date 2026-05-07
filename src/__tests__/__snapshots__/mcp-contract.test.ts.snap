@@ -18,6 +18,17 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "readOnlyHint": true,
     },
+    "description": "List every person who has access to this project, along with any agent sessions they currently have running. Returns each member's GitHub login, their role (OWNER or MEMBER), and any agents they have registered — including the agent name and when it was last seen. Use this to discover collaborators who may not have active claims or messages yet, to find the right agent name before sending a targeted message, or to understand who is actively online right now. A member with no agents has never run the dibs CLI in this project; a member whose most recent agent lastSeenAt is older than a few minutes is likely not in an active session.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object",
+    },
+    "name": "list_members",
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true,
+    },
     "description": "Fetch active, blocked, and recently-finished claims across the project, optionally filtered to a specific file path. Call this before editing a file to check whether another agent has claimed it — pass the relative file path in \`path\` to narrow results. Returns claims in states ACTIVE, BLOCKED, and WRAPPING_UP (meaning the other agent is almost done and you may proceed soon), plus ABANDONED and STALE claims from the last 24 hours for context. Claims older than 4 hours with no updates are automatically marked STALE on this call — treat STALE claims as low-risk but still worth a quick message if paths overlap. Does not modify any claim state beyond the automatic stale-marking.",
     "inputSchema": {
       "properties": {

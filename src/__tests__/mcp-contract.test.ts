@@ -4,6 +4,7 @@ import { MCP_TOOLS } from '../commands/mcp'
 // These are the names agents depend on. Renaming or removing a tool is a breaking change.
 const EXPECTED_TOOL_NAMES = [
   'register_agent',
+  'list_members',
   'get_claims',
   'create_claim',
   'update_claim',
@@ -44,7 +45,7 @@ describe('MCP tool surface', () => {
   })
 
   it('tools with no required fields have none listed', () => {
-    const noRequiredTools = ['register_agent', 'get_claims', 'get_messages']
+    const noRequiredTools = ['register_agent', 'list_members', 'get_claims', 'get_messages']
     for (const toolName of noRequiredTools) {
       const tool = MCP_TOOLS.find((t) => t.name === toolName)
       expect(tool, `tool "${toolName}" must exist`).toBeDefined()

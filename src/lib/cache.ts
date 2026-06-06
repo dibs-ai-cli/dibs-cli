@@ -32,6 +32,7 @@ export interface SyncData {
 
 export interface CacheEntry {
   projectId: string
+  agentName: string
   fetchedAt: number
   data: SyncData
 }
@@ -43,13 +44,21 @@ export const CACHE_MAX_AGE_MS = 90_000
 
 const CACHE_DIR = path.join(os.homedir(), '.dibs', 'cache')
 
-export function getCachePath(projectId: string): string {
-  return path.join(CACHE_DIR, `${projectId}.json`)
+// Sync data is scoped to (project, agent) on the server, so the cache file must
+// be too — otherwise sibling sessions on one machine with distinct
+// DIBS_AGENT_NAME values clobber each other's identity-scoped view, and the
+// session-start / sync hooks surface the wrong session's messages and claims.
+function safeAgent(agentName: string): string {
+  return agentName.replace(/[^a-zA-Z0-9._@-]/g, '_')
 }
 
-export function readCache(projectId: string): CacheEntry | null {
+export function getCachePath(projectId: string, agentName: string): string {
+  return path.join(CACHE_DIR, `${projectId}--${safeAgent(agentName)}.json`)
+}
+
+export function readCache(projectId: string, agentName: string): CacheEntry | null {
   try {
-    const raw = fs.readFileSync(getCachePath(projectId), 'utf8')
+    const raw = fs.readFileSync(getCachePath(projectId, agentName), 'utf8')
     return JSON.parse(raw) as CacheEntry
   } catch {
     return null
@@ -59,9 +68,13 @@ export function readCache(projectId: string): CacheEntry | null {
 export function writeCache(entry: CacheEntry): void {
   fs.mkdirSync(CACHE_DIR, { recursive: true })
   // Atomic write: write to a temp file then rename so readers never see a partial file.
-  const tmp = path.join(os.tmpdir(), `dibs-${entry.projectId}-${Date.now()}.json`)
+  // Include the agent in the temp name so concurrent writers don't collide.
+  const tmp = path.join(
+    os.tmpdir(),
+    `dibs-${entry.projectId}-${safeAgent(entry.agentName)}-${Date.now()}.json`
+  )
   fs.writeFileSync(tmp, JSON.stringify(entry))
-  fs.renameSync(tmp, getCachePath(entry.projectId))
+  fs.renameSync(tmp, getCachePath(entry.projectId, entry.agentName))
 }
 
 export function isFresh(entry: CacheEntry): boolean {

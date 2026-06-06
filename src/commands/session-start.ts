@@ -11,10 +11,12 @@ export async function runSessionStart() {
   const proj = findProject()
   if (!proj) return
 
+  const agentName = resolveAgentName()
+
   let messages: SyncData['messages']
   let unread: number
 
-  const cached = readCache(proj.projectId)
+  const cached = readCache(proj.projectId, agentName)
   if (cached && isFresh(cached)) {
     messages = cached.data.messages
     unread = cached.data.unread
@@ -24,7 +26,7 @@ export async function runSessionStart() {
         'GET',
         `/projects/${proj.projectId}/messages`,
         undefined,
-        { token: creds.token, agentName: resolveAgentName() }
+        { token: creds.token, agentName }
       )
       messages = result.messages
       unread = result.unread

@@ -345,7 +345,7 @@ export function runMcp() {
     try {
       const data = await api.getSync() as SyncData
       memCache = data
-      writeCache({ projectId: proj.projectId, fetchedAt: Date.now(), data })
+      writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data })
 
       if (!versionChecked) {
         versionChecked = true
@@ -361,8 +361,9 @@ export function runMcp() {
     }
   }
 
-  // Seed from disk if a fresh cache already exists (e.g. another session wrote it)
-  const existing = readCache(proj.projectId)
+  // Seed from disk if a fresh cache already exists for this same identity
+  // (e.g. a hook or a prior run of this agent wrote it).
+  const existing = readCache(proj.projectId, agentName)
   if (existing && isFresh(existing)) memCache = existing.data
 
   // Start background polling; .unref() so the interval doesn't prevent clean exit
@@ -392,7 +393,7 @@ export function runMcp() {
           ])
           const syncData = sync as SyncData
           memCache = syncData
-          writeCache({ projectId: proj.projectId, fetchedAt: Date.now(), data: syncData })
+          writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })
           result = {
             agent,
             project,
@@ -478,7 +479,7 @@ export function runMcp() {
               messages: remaining,
               unread: Math.max(0, memCache.unread - (memCache.messages.length - remaining.length)),
             }
-            writeCache({ projectId: proj.projectId, fetchedAt: Date.now(), data: memCache })
+            writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: memCache })
           }
           break
         }

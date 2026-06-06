@@ -26,8 +26,10 @@ export async function runSync() {
   const proj = findProject()
   if (!proj) return
 
+  const agentName = resolveAgentName()
+
   let data: SyncData
-  const cached = readCache(proj.projectId)
+  const cached = readCache(proj.projectId, agentName)
   if (cached && isFresh(cached)) {
     data = cached.data
   } else {
@@ -36,7 +38,7 @@ export async function runSync() {
         'GET',
         `/projects/${proj.projectId}/sync`,
         undefined,
-        { token: creds.token, agentName: resolveAgentName() }
+        { token: creds.token, agentName }
       )
     } catch {
       return

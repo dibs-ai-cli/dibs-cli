@@ -361,6 +361,27 @@ const slimClaimList = (x: unknown): unknown =>
 const slimMessageList = (x: unknown): unknown =>
   Array.isArray(x) ? x.map(slimMessage) : x
 
+function slimAgent(a: any): unknown {
+  if (!a || typeof a !== 'object') return a
+  return { name: a.name, lastSeenAt: a.lastSeenAt }
+}
+
+function slimProject(p: any): unknown {
+  if (!p || typeof p !== 'object') return p
+  // Drop id/ownerId/timestamps and the embedded member roster (emails included)
+  // — the model only needs the project's identity, and list_members covers members.
+  return { name: p.name, repoOwner: p.repoOwner, repoName: p.repoName }
+}
+
+function slimMember(m: any): unknown {
+  if (!m || typeof m !== 'object') return m
+  return {
+    githubLogin: m.githubLogin,
+    role: m.role,
+    ...(Array.isArray(m.agents) ? { agents: m.agents.map(slimAgent) } : {}),
+  }
+}
+
 export function runMcp() {
   const creds = requireCredentials()
   const proj = requireProject()
@@ -434,15 +455,16 @@ export function runMcp() {
           memCache = syncData
           writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })
           result = {
-            agent,
-            project,
+            agent: slimAgent(agent),
+            project: slimProject(project),
             activeClaims: syncData.claims.map(slimClaim),
             unreadMessages: syncData.messages.map(slimMessage),
           }
           break
         }
         case 'list_members': {
-          result = await api.getMembers()
+          const members = await api.getMembers()
+          result = Array.isArray(members) ? members.map(slimMember) : members
           break
         }
         case 'get_claims': {

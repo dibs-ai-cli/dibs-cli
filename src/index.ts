@@ -52,6 +52,14 @@ program
   })
 
 program
+  .command('approve <githubLogin>')
+  .description('Approve a pending auto-join request (project owner only)')
+  .action(async (githubLogin: string) => {
+    const { runApprove } = await import('./commands/approve')
+    await runApprove(githubLogin)
+  })
+
+program
   .command('mcp')
   .description('Start the dibs MCP server (used by Claude Code via mcpServers config)')
   .action(async () => {

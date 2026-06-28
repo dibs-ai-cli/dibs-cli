@@ -33,7 +33,7 @@ function describeError(tool: string, err: unknown): string {
       'Run `dibs login` in your terminal to re-authenticate, then restart this Claude Code session.'
     )
   }
-  if (status === 403 && message.includes('not a member')) {
+  if (status === 403 && /not a member/i.test(message)) {
     return (
       'You are not a member of this project. ' +
       'Ask the project owner to invite you, or run `dibs init` to connect to a project you own.'
@@ -131,6 +131,7 @@ export const MCP_TOOLS = [
       'List everyone with access to this project and their running agent sessions — each member\'s GitHub login, ' +
       'role (OWNER or MEMBER), and registered agents (name + lastSeenAt). ' +
       'Use it to find an agent name before messaging, or to see who is online. ' +
+      'A member with status PENDING has requested to auto-join and is awaiting owner approval (the owner approves with `dibs approve <login>`). ' +
       'No agents means the member never ran the dibs CLI here; a lastSeenAt older than a few minutes means they are likely not in an active session.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} },
@@ -378,7 +379,50 @@ function slimMember(m: any): unknown {
   return {
     githubLogin: m.githubLogin,
     role: m.role,
+    // Only surface non-default status (PENDING) — ACTIVE is the common case.
+    ...(m.status && m.status !== 'ACTIVE' ? { status: m.status } : {}),
     ...(Array.isArray(m.agents) ? { agents: m.agents.map(slimAgent) } : {}),
+  }
+}
+
+type RegisterApi = {
+  registerAgent: (name: string) => Promise<unknown>
+  getProject: () => Promise<unknown>
+  getSync: () => Promise<unknown>
+  join: (code: string) => Promise<{ status?: string }>
+}
+
+/**
+ * Fetch the register_agent bundle, auto-joining on first contact.
+ * A contributor lands here via the repo's committed .dibs/project.json without
+ * being a member yet — on "not a member" we redeem the committed joinCode. If the
+ * project auto-approves, we're in immediately and retry; otherwise a join request
+ * is filed and we report that the owner must approve before they're active.
+ */
+export async function registerWithAutoJoin(
+  api: RegisterApi,
+  agentName: string,
+  joinCode?: string
+): Promise<[unknown, unknown, unknown]> {
+  const fetchBundle = (): Promise<[unknown, unknown, unknown]> =>
+    Promise.all([api.registerAgent(agentName), api.getProject(), api.getSync()])
+
+  try {
+    return await fetchBundle()
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 403 && /not a member/i.test(err.message)) {
+      if (!joinCode) throw err
+      const res = await api.join(joinCode)
+      if (res?.status === 'pending') {
+        // Plain Error: describeError returns its message verbatim (not "API error").
+        throw new Error(
+          'Join request submitted — waiting for the project owner to approve. ' +
+            'You are not active in this project yet; retry register_agent once approved.'
+        )
+      }
+      return await fetchBundle()
+    }
+    throw err
   }
 }
 
@@ -446,11 +490,8 @@ export function runMcp() {
       switch (name) {
         case 'register_agent': {
           // Always authoritative — hits the API and seeds the cache with fresh data.
-          const [agent, project, sync] = await Promise.all([
-            api.registerAgent(agentName),
-            api.getProject(),
-            api.getSync(),
-          ])
+          // Auto-joins the project on first contact (see registerWithAutoJoin).
+          const [agent, project, sync] = await registerWithAutoJoin(api, agentName, proj.joinCode)
           const syncData = sync as SyncData
           memCache = syncData
           writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })

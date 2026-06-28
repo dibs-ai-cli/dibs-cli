@@ -3,7 +3,8 @@ import path from 'path'
 import { execSync } from 'child_process'
 import readline from 'readline'
 import { requireCredentials } from '../lib/credentials'
-import { apiCall } from '../lib/api'
+import { apiCall, ApiError } from '../lib/api'
+import { findProject } from '../lib/project'
 
 interface Project {
   id: string
@@ -15,6 +16,8 @@ interface Project {
   createdAt: string
   updatedAt: string
   role?: 'OWNER' | 'MEMBER'
+  joinCode?: string | null
+  autoApprove?: boolean
 }
 
 function parseGitRemote(remote: string): { owner: string; repo: string } | null {
@@ -119,6 +122,67 @@ async function runInitInner() {
   // 2. GET /projects — list user's memberships
   const projects = await apiCall<Project[]>('GET', '/projects', undefined, { token: creds.token })
 
+  let selectedProject: Project | null = null
+  // When true, write the project pointer to a gitignored .dibs/project.local.json
+  // override instead of the shared, committed .dibs/project.json.
+  let useLocalFile = false
+
+  // If this repo already designates a project (committed .dibs/project.json),
+  // default to it instead of creating a duplicate — but let the contributor opt
+  // out and use their own project, which lands in a local override file.
+  const committed = findProject(cwd)
+  if (committed) {
+    const known = projects.find((p) => p.id === committed.projectId) ?? null
+    const label = known ? known.name : `${committed.projectId.slice(0, 8)}…`
+    const ans = await prompt(`This repo is set up for dibs project "${label}". Use it? [Y/n] `)
+    if (ans.toLowerCase() === 'n') {
+      // Keep the shared pointer untouched; their choice goes to project.local.json.
+      useLocalFile = true
+    } else if (known) {
+      selectedProject = known
+      console.log(`Using this repo's project: ${known.name}`)
+    } else {
+      if (!committed.joinCode) {
+        console.error(
+          "This repo points at a dibs project you're not a member of, and it has no join code.\n" +
+            "Ask the owner for an invite link, or re-run `dibs init` and answer 'n' to use your own project."
+        )
+        process.exit(1)
+      }
+      let status: string | undefined
+      try {
+        const res = await apiCall<{ status?: string }>(
+          'POST',
+          `/projects/${committed.projectId}/join`,
+          { code: committed.joinCode },
+          { token: creds.token }
+        )
+        status = res.status
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 403) {
+          console.error(
+            "This repo's join code was rejected (it may have been rotated).\n" +
+              "Ask the owner for an invite link, or re-run `dibs init` and answer 'n' to use your own project."
+          )
+          process.exit(1)
+        }
+        throw err
+      }
+      const after = await apiCall<Project[]>('GET', '/projects', undefined, { token: creds.token })
+      selectedProject =
+        after.find((p) => p.id === committed.projectId) ??
+        ({ id: committed.projectId, name: committed.projectId } as Project)
+      if (status === 'pending') {
+        console.log(
+          `Join request submitted for "${selectedProject.name}" — the owner must approve before you're active. ` +
+            "Setting up local config so you're ready once approved."
+        )
+      } else {
+        console.log(`Joined this repo's project: ${selectedProject.name}`)
+      }
+    }
+  }
+
   // 3. Filter by detected remote (if any)
   const matches = (detectedOwner && detectedRepo)
     ? projects.filter(
@@ -129,9 +193,7 @@ async function runInitInner() {
     : []
 
   // 4. Show picker
-  let selectedProject: Project | null = null
-
-  if (matches.length > 0) {
+  if (!selectedProject && matches.length > 0) {
     console.log('\nExisting projects for this repo:')
     matches.forEach((p, i) => {
       const role = (p.role ?? 'member').toLowerCase()
@@ -170,24 +232,39 @@ async function runInitInner() {
       process.exit(1)
     }
 
-    const createBody: { name: string; repoOwner?: string; repoName?: string } = { name }
+    const autoApproveAns = await prompt('Allow anyone who can clone this repo to auto-join? [Y/n] ')
+    const autoApprove = autoApproveAns.toLowerCase() !== 'n'
+
+    const createBody: {
+      name: string
+      repoOwner?: string
+      repoName?: string
+      autoApprove: boolean
+    } = { name, autoApprove }
     if (detectedOwner && detectedRepo) {
       createBody.repoOwner = detectedOwner
       createBody.repoName = detectedRepo
     }
 
     selectedProject = await apiCall<Project>('POST', '/projects', createBody, { token: creds.token })
-    console.log(`Project created (id: ${selectedProject.id})`)
+    console.log(
+      `Project created (id: ${selectedProject.id})` +
+        (autoApprove ? '' : ' — auto-join requests will need your approval (`dibs approve <login>`)')
+    )
   }
 
   const projectId = selectedProject.id
 
   // 3. Compute pending writes
 
-  // .dibs/project.json
+  // .dibs/project.json (shared) or .dibs/project.local.json (personal override)
   const dibsDir = path.join(cwd, '.dibs')
-  const projectJsonPath = path.join(dibsDir, 'project.json')
-  const projectJsonContent = JSON.stringify({ projectId }, null, 2) + '\n'
+  const projectFileLabel = useLocalFile ? '.dibs/project.local.json' : '.dibs/project.json'
+  const projectJsonPath = path.join(dibsDir, useLocalFile ? 'project.local.json' : 'project.json')
+  // joinCode comes from the API (owner reads/creates) or the already-committed file.
+  const joinCode = selectedProject.joinCode ?? committed?.joinCode ?? undefined
+  const projectJsonContent =
+    JSON.stringify(joinCode ? { projectId, joinCode } : { projectId }, null, 2) + '\n'
   const existingProjectJson = fs.existsSync(projectJsonPath)
     ? fs.readFileSync(projectJsonPath, 'utf8')
     : null
@@ -263,25 +340,27 @@ async function runInitInner() {
   }
   const settingsContent = JSON.stringify(mergedSettings, null, 2) + '\n'
 
-  // .gitignore — ensure .claude/settings.local.json is listed
+  // .gitignore — ensure per-machine files are listed (settings, and the local
+  // project override when the contributor chose their own project).
   const gitignorePath = path.join(cwd, '.gitignore')
   const existingGitignore = fs.existsSync(gitignorePath)
     ? fs.readFileSync(gitignorePath, 'utf8')
     : ''
-  const gitignoreEntry = '.claude/settings.local.json'
-  const needsGitignoreUpdate = !existingGitignore
-    .split(/\r?\n/)
-    .some((line) => line.trim() === gitignoreEntry)
+  const gitignoreEntries = ['.claude/settings.local.json']
+  if (useLocalFile) gitignoreEntries.push('.dibs/project.local.json')
+  const existingLines = new Set(existingGitignore.split(/\r?\n/).map((l) => l.trim()))
+  const missingEntries = gitignoreEntries.filter((e) => !existingLines.has(e))
+  const needsGitignoreUpdate = missingEntries.length > 0
   const newGitignore = needsGitignoreUpdate
-    ? (existingGitignore.endsWith('\n') || existingGitignore === ''
-        ? existingGitignore + gitignoreEntry + '\n'
-        : existingGitignore + '\n' + gitignoreEntry + '\n')
+    ? (existingGitignore === '' || existingGitignore.endsWith('\n')
+        ? existingGitignore + missingEntries.join('\n') + '\n'
+        : existingGitignore + '\n' + missingEntries.join('\n') + '\n')
     : existingGitignore
 
   // 4. Show diff and prompt
   const diffs: string[] = []
 
-  const projectJsonDiff = simpleDiff('.dibs/project.json', existingProjectJson, projectJsonContent)
+  const projectJsonDiff = simpleDiff(projectFileLabel, existingProjectJson, projectJsonContent)
   if (projectJsonDiff) diffs.push(projectJsonDiff)
 
   const mcpJsonDiff = simpleDiff('.mcp.json', existingMcpRaw, mcpJsonContent)

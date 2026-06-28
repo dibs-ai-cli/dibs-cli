@@ -7,7 +7,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
       "idempotentHint": true,
       "readOnlyHint": false,
     },
-    "description": "Start a coordination session at the beginning of every work session — call this once before doing anything else. Returns the project name, your agent identity, all currently active claims in the project, and any unread messages addressed to you. Use the returned active claims to understand what other agents are working on before you start, and check unread messages for any coordination requests waiting for you. This call is idempotent: re-running it updates your presence timestamp and returns fresh state without creating duplicates.",
+    "description": "Call once at the start of a work session, before anything else. Returns the project, your agent identity, all active claims, and unread messages addressed to you — review the claims to see what others are working on, and check messages for coordination requests. Idempotent: re-running refreshes your presence and returns current state without creating duplicates.",
     "inputSchema": {
       "properties": {},
       "type": "object",
@@ -18,7 +18,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "readOnlyHint": true,
     },
-    "description": "List every person who has access to this project, along with any agent sessions they currently have running. Returns each member's GitHub login, their role (OWNER or MEMBER), and any agents they have registered — including the agent name and when it was last seen. Use this to discover collaborators who may not have active claims or messages yet, to find the right agent name before sending a targeted message, or to understand who is actively online right now. A member with no agents has never run the dibs CLI in this project; a member whose most recent agent lastSeenAt is older than a few minutes is likely not in an active session.",
+    "description": "List everyone with access to this project and their running agent sessions — each member's GitHub login, role (OWNER or MEMBER), and registered agents (name + lastSeenAt). Use it to find an agent name before messaging, or to see who is online. A member with status PENDING has requested to auto-join and is awaiting owner approval (the owner approves with \`dibs approve <login>\`). No agents means the member never ran the dibs CLI here; a lastSeenAt older than a few minutes means they are likely not in an active session.",
     "inputSchema": {
       "properties": {},
       "type": "object",
@@ -29,7 +29,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "readOnlyHint": true,
     },
-    "description": "Fetch active, blocked, and recently-finished claims across the project, optionally filtered to a specific file path. Call this before editing a file to check whether another agent has claimed it — pass the relative file path in \`path\` to narrow results. Returns claims in states ACTIVE, BLOCKED, and WRAPPING_UP (meaning the other agent is almost done and you may proceed soon), plus ABANDONED and STALE claims from the last 24 hours for context. Claims older than 4 hours with no updates are automatically marked STALE on this call — treat STALE claims as low-risk but still worth a quick message if paths overlap. Does not modify any claim state beyond the automatic stale-marking.",
+    "description": "Check who is working on what before editing — pass a relative \`path\` to filter to claims touching that file. Returns ACTIVE, BLOCKED, and WRAPPING_UP claims (WRAPPING_UP = nearly done, you may proceed soon), plus ABANDONED and STALE ones from the last 24 hours. Claims untouched for 4 hours are auto-marked STALE on this call (low-risk, but message the owner if paths overlap). Modifies no other state.",
     "inputSchema": {
       "properties": {
         "path": {
@@ -45,7 +45,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "destructiveHint": false,
     },
-    "description": "Register intent to work on a set of files or a conceptual area — call this before starting work, not after. Use FILE for tightly-scoped changes to specific files; use IDEA for larger efforts where the full file set is not yet known. Always provide \`paths\` when you know which files you will touch: path-based claims trigger automatic conflict warnings to any other agent already claiming those files, and the response includes a \`conflicts\` array with details. If \`conflicts\` is non-empty, read those claims, then use send_message to coordinate with the conflicting agents before proceeding — do not silently proceed over an active conflict. Claims without paths do not trigger conflict detection. Only you (this agent) can update or release a claim you create.",
+    "description": "Register intent to work on files or an area before you start, not after. Use FILE for specific paths, IDEA for broader work where the file set is not yet known. Always pass \`paths\` when known — path claims trigger conflict warnings and the response's \`conflicts\` array lists any overlapping claims. If \`conflicts\` is non-empty, read them and use send_message to coordinate before proceeding — do not silently proceed over a conflict. Claims without paths skip conflict detection. Only you can update or release a claim you create.",
     "inputSchema": {
       "properties": {
         "note": {
@@ -84,7 +84,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "destructiveHint": false,
     },
-    "description": "Update the status, file paths, or progress note on a claim you own. Status transitions signal your progress to other agents: set BLOCKED when you are waiting on something and others should know not to expect completion soon; set WRAPPING_UP when you are finishing and others can begin planning their work on overlapping paths; set ABANDONED to cancel a claim you will not complete (or use release_claim as a convenience). Valid status values are ACTIVE (default), BLOCKED, WRAPPING_UP, and ABANDONED. You can only update claims created by this agent — attempting to update another agent's claim will return a 403 error.",
+    "description": "Update the status, paths, or note on a claim you own. Status signals progress to others: BLOCKED (waiting on something), WRAPPING_UP (finishing — others can start planning overlapping work), ABANDONED (cancel; or use release_claim). Values: ACTIVE, BLOCKED, WRAPPING_UP, ABANDONED. Updating another agent's claim returns a 403 error.",
     "inputSchema": {
       "properties": {
         "claimId": {
@@ -125,7 +125,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
       "destructiveHint": true,
       "idempotentHint": false,
     },
-    "description": "Mark a claim as complete and release it when you have finished the work. This sets the claim status to ABANDONED, which signals to other agents that the files are free. Call this as soon as your work on the claimed files is done — do not leave claims open indefinitely. You can only release claims created by this agent. Equivalent to calling update_claim with status ABANDONED.",
+    "description": "Mark a claim complete and free its files when you are done — sets status to ABANDONED. Release as soon as the work is finished; do not leave claims open. You can only release your own claims. Same as update_claim with status ABANDONED.",
     "inputSchema": {
       "properties": {
         "claimId": {
@@ -144,7 +144,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "destructiveHint": false,
     },
-    "description": "Send a coordination message to another agent, to the human user, or broadcast to everyone in the project. Use AGENT when you need to coordinate directly with a specific agent (e.g. you detected a conflict and want to negotiate scope); if that agent has been inactive for 30+ minutes the message is automatically escalated to their human user as well. Use USER to ask the human a question or flag something that requires human judgment. Use BROADCAST for project-wide announcements (e.g. "I am refactoring the auth module, expect widespread changes"). Set \`claimId\` to link the message to a specific claim for context. Set \`parentMessageId\` to reply within an existing thread.",
+    "description": "Send a coordination message to an agent, the human user, or everyone. AGENT: coordinate with a specific agent (e.g. negotiate scope on a conflict); auto-escalated to their human if they have been inactive 30+ minutes. USER: ask the human or flag something needing their judgment. BROADCAST: project-wide announcements (e.g. "refactoring auth, expect widespread changes"). Set \`claimId\` to link a claim for context, \`parentMessageId\` to reply in a thread.",
     "inputSchema": {
       "properties": {
         "body": {
@@ -185,7 +185,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
     "annotations": {
       "readOnlyHint": true,
     },
-    "description": "Fetch unread messages addressed to this agent, to your user, or broadcast to the project — or retrieve a full conversation thread. Call this periodically during long-running work to catch coordination requests from other agents. Without \`threadId\`, returns all unread messages plus the total unread count; mark messages as read with mark_read once you have acted on them. Pass \`threadId\` (any message ID in the thread) to fetch the full conversation thread in chronological order — useful when you receive a reply and need the prior context.",
+    "description": "Fetch unread messages addressed to you, your user, or broadcast — or a full conversation thread. Call periodically during long work to catch coordination requests. Without \`threadId\`: returns unread messages and the unread count (use mark_read once handled). With \`threadId\` (any message ID in the thread): returns the full conversation in order — useful for prior context on a reply.",
     "inputSchema": {
       "properties": {
         "threadId": {
@@ -202,7 +202,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
       "idempotentHint": true,
       "readOnlyHint": false,
     },
-    "description": "Mark one or more messages as read so they no longer appear in future get_messages calls. Call this after you have read and acted on messages returned by get_messages. You can only mark messages addressed to you or broadcast to the project. Accepts a list of message IDs — batch all messages from a single get_messages response into one call.",
+    "description": "Mark messages as read so they stop appearing in get_messages. Call after acting on messages from get_messages. You can only mark messages addressed to you or broadcast. Batch all IDs from one get_messages response into a single call.",
     "inputSchema": {
       "properties": {
         "messageIds": {

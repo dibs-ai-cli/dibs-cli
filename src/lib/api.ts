@@ -90,6 +90,11 @@ export function makeProjectApi(
     registerAgent: (name: string) =>
       apiCall('POST', `${projectBase}/agents`, { name }, opts),
 
+    // Auto-join: redeem the repo's committed joinCode. Returns { status:
+    // 'active' | 'pending' } — pending when the project requires owner approval.
+    join: (code: string) =>
+      apiCall<{ status?: string }>('POST', `${projectBase}/join`, { code }, opts),
+
     getProject: () => apiCall('GET', projectBase, undefined, opts),
 
     getClaims: (filterPath?: string) => {

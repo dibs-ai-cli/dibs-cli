@@ -33,7 +33,7 @@ function describeError(tool: string, err: unknown): string {
       'Run `dibs login` in your terminal to re-authenticate, then restart this Claude Code session.'
     )
   }
-  if (status === 403 && message.includes('not a member')) {
+  if (status === 403 && /not a member/i.test(message)) {
     return (
       'You are not a member of this project. ' +
       'Ask the project owner to invite you, or run `dibs init` to connect to a project you own.'
@@ -118,31 +118,31 @@ export const MCP_TOOLS = [
   {
     name: 'register_agent',
     description:
-      'Start a coordination session at the beginning of every work session — call this once before doing anything else. ' +
-      'Returns the project name, your agent identity, all currently active claims in the project, and any unread messages addressed to you. ' +
-      'Use the returned active claims to understand what other agents are working on before you start, and check unread messages for any coordination requests waiting for you. ' +
-      'This call is idempotent: re-running it updates your presence timestamp and returns fresh state without creating duplicates.',
+      'Call once at the start of a work session, before anything else. ' +
+      'Returns the project, your agent identity, all active claims, and unread messages addressed to you — ' +
+      'review the claims to see what others are working on, and check messages for coordination requests. ' +
+      'Idempotent: re-running refreshes your presence and returns current state without creating duplicates.',
     annotations: { readOnlyHint: false, idempotentHint: true },
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'list_members',
     description:
-      'List every person who has access to this project, along with any agent sessions they currently have running. ' +
-      'Returns each member\'s GitHub login, their role (OWNER or MEMBER), and any agents they have registered — including the agent name and when it was last seen. ' +
-      'Use this to discover collaborators who may not have active claims or messages yet, to find the right agent name before sending a targeted message, or to understand who is actively online right now. ' +
-      'A member with no agents has never run the dibs CLI in this project; a member whose most recent agent lastSeenAt is older than a few minutes is likely not in an active session.',
+      'List everyone with access to this project and their running agent sessions — each member\'s GitHub login, ' +
+      'role (OWNER or MEMBER), and registered agents (name + lastSeenAt). ' +
+      'Use it to find an agent name before messaging, or to see who is online. ' +
+      'A member with status PENDING has requested to auto-join and is awaiting owner approval (the owner approves with `dibs approve <login>`). ' +
+      'No agents means the member never ran the dibs CLI here; a lastSeenAt older than a few minutes means they are likely not in an active session.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'get_claims',
     description:
-      'Fetch active, blocked, and recently-finished claims across the project, optionally filtered to a specific file path. ' +
-      'Call this before editing a file to check whether another agent has claimed it — pass the relative file path in `path` to narrow results. ' +
-      'Returns claims in states ACTIVE, BLOCKED, and WRAPPING_UP (meaning the other agent is almost done and you may proceed soon), plus ABANDONED and STALE claims from the last 24 hours for context. ' +
-      'Claims older than 4 hours with no updates are automatically marked STALE on this call — treat STALE claims as low-risk but still worth a quick message if paths overlap. ' +
-      'Does not modify any claim state beyond the automatic stale-marking.',
+      'Check who is working on what before editing — pass a relative `path` to filter to claims touching that file. ' +
+      'Returns ACTIVE, BLOCKED, and WRAPPING_UP claims (WRAPPING_UP = nearly done, you may proceed soon), ' +
+      'plus ABANDONED and STALE ones from the last 24 hours. ' +
+      'Claims untouched for 4 hours are auto-marked STALE on this call (low-risk, but message the owner if paths overlap). Modifies no other state.',
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
@@ -158,11 +158,11 @@ export const MCP_TOOLS = [
   {
     name: 'create_claim',
     description:
-      'Register intent to work on a set of files or a conceptual area — call this before starting work, not after. ' +
-      'Use FILE for tightly-scoped changes to specific files; use IDEA for larger efforts where the full file set is not yet known. ' +
-      'Always provide `paths` when you know which files you will touch: path-based claims trigger automatic conflict warnings to any other agent already claiming those files, and the response includes a `conflicts` array with details. ' +
-      'If `conflicts` is non-empty, read those claims, then use send_message to coordinate with the conflicting agents before proceeding — do not silently proceed over an active conflict. ' +
-      'Claims without paths do not trigger conflict detection. Only you (this agent) can update or release a claim you create.',
+      'Register intent to work on files or an area before you start, not after. ' +
+      'Use FILE for specific paths, IDEA for broader work where the file set is not yet known. ' +
+      'Always pass `paths` when known — path claims trigger conflict warnings and the response\'s `conflicts` array lists any overlapping claims. ' +
+      'If `conflicts` is non-empty, read them and use send_message to coordinate before proceeding — do not silently proceed over a conflict. ' +
+      'Claims without paths skip conflict detection. Only you can update or release a claim you create.',
     annotations: { destructiveHint: false },
     inputSchema: {
       type: 'object',
@@ -194,10 +194,10 @@ export const MCP_TOOLS = [
   {
     name: 'update_claim',
     description:
-      'Update the status, file paths, or progress note on a claim you own. ' +
-      'Status transitions signal your progress to other agents: set BLOCKED when you are waiting on something and others should know not to expect completion soon; set WRAPPING_UP when you are finishing and others can begin planning their work on overlapping paths; set ABANDONED to cancel a claim you will not complete (or use release_claim as a convenience). ' +
-      'Valid status values are ACTIVE (default), BLOCKED, WRAPPING_UP, and ABANDONED. ' +
-      'You can only update claims created by this agent — attempting to update another agent\'s claim will return a 403 error.',
+      'Update the status, paths, or note on a claim you own. ' +
+      'Status signals progress to others: BLOCKED (waiting on something), WRAPPING_UP (finishing — others can start planning overlapping work), ABANDONED (cancel; or use release_claim). ' +
+      'Values: ACTIVE, BLOCKED, WRAPPING_UP, ABANDONED. ' +
+      'Updating another agent\'s claim returns a 403 error.',
     annotations: { destructiveHint: false },
     inputSchema: {
       type: 'object',
@@ -227,10 +227,9 @@ export const MCP_TOOLS = [
   {
     name: 'release_claim',
     description:
-      'Mark a claim as complete and release it when you have finished the work. ' +
-      'This sets the claim status to ABANDONED, which signals to other agents that the files are free. ' +
-      'Call this as soon as your work on the claimed files is done — do not leave claims open indefinitely. ' +
-      'You can only release claims created by this agent. Equivalent to calling update_claim with status ABANDONED.',
+      'Mark a claim complete and free its files when you are done — sets status to ABANDONED. ' +
+      'Release as soon as the work is finished; do not leave claims open. ' +
+      'You can only release your own claims. Same as update_claim with status ABANDONED.',
     annotations: { destructiveHint: true, idempotentHint: false },
     inputSchema: {
       type: 'object',
@@ -246,11 +245,11 @@ export const MCP_TOOLS = [
   {
     name: 'send_message',
     description:
-      'Send a coordination message to another agent, to the human user, or broadcast to everyone in the project. ' +
-      'Use AGENT when you need to coordinate directly with a specific agent (e.g. you detected a conflict and want to negotiate scope); if that agent has been inactive for 30+ minutes the message is automatically escalated to their human user as well. ' +
-      'Use USER to ask the human a question or flag something that requires human judgment. ' +
-      'Use BROADCAST for project-wide announcements (e.g. "I am refactoring the auth module, expect widespread changes"). ' +
-      'Set `claimId` to link the message to a specific claim for context. Set `parentMessageId` to reply within an existing thread.',
+      'Send a coordination message to an agent, the human user, or everyone. ' +
+      'AGENT: coordinate with a specific agent (e.g. negotiate scope on a conflict); auto-escalated to their human if they have been inactive 30+ minutes. ' +
+      'USER: ask the human or flag something needing their judgment. ' +
+      'BROADCAST: project-wide announcements (e.g. "refactoring auth, expect widespread changes"). ' +
+      'Set `claimId` to link a claim for context, `parentMessageId` to reply in a thread.',
     annotations: { destructiveHint: false },
     inputSchema: {
       type: 'object',
@@ -284,10 +283,10 @@ export const MCP_TOOLS = [
   {
     name: 'get_messages',
     description:
-      'Fetch unread messages addressed to this agent, to your user, or broadcast to the project — or retrieve a full conversation thread. ' +
-      'Call this periodically during long-running work to catch coordination requests from other agents. ' +
-      'Without `threadId`, returns all unread messages plus the total unread count; mark messages as read with mark_read once you have acted on them. ' +
-      'Pass `threadId` (any message ID in the thread) to fetch the full conversation thread in chronological order — useful when you receive a reply and need the prior context.',
+      'Fetch unread messages addressed to you, your user, or broadcast — or a full conversation thread. ' +
+      'Call periodically during long work to catch coordination requests. ' +
+      'Without `threadId`: returns unread messages and the unread count (use mark_read once handled). ' +
+      'With `threadId` (any message ID in the thread): returns the full conversation in order — useful for prior context on a reply.',
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
@@ -303,10 +302,10 @@ export const MCP_TOOLS = [
   {
     name: 'mark_read',
     description:
-      'Mark one or more messages as read so they no longer appear in future get_messages calls. ' +
-      'Call this after you have read and acted on messages returned by get_messages. ' +
-      'You can only mark messages addressed to you or broadcast to the project. ' +
-      'Accepts a list of message IDs — batch all messages from a single get_messages response into one call.',
+      'Mark messages as read so they stop appearing in get_messages. ' +
+      'Call after acting on messages from get_messages. ' +
+      'You can only mark messages addressed to you or broadcast. ' +
+      'Batch all IDs from one get_messages response into a single call.',
     annotations: { readOnlyHint: false, idempotentHint: true },
     inputSchema: {
       type: 'object',
@@ -321,6 +320,111 @@ export const MCP_TOOLS = [
     },
   },
 ] as const
+
+// --- Result slimming ---
+// The API returns fat ORM rows (projectId, userId, agentId, nested *.id,
+// createdAt, expiresAt, …). MCP tool results stay in the model's context for the
+// rest of the session, so every redundant field is paid for on every later turn.
+// Project results down to the fields the model actually uses before returning.
+
+function slimClaim(c: any): unknown {
+  if (!c || typeof c !== 'object') return c
+  return {
+    id: c.id,
+    type: c.type,
+    title: c.title,
+    paths: c.paths,
+    status: c.status,
+    ...(c.note != null ? { note: c.note } : {}),
+    updatedAt: c.updatedAt,
+    ...(c.agent ? { agent: { name: c.agent.name } } : {}),
+    ...(c.user ? { user: { githubLogin: c.user.githubLogin } } : {}),
+  }
+}
+
+function slimMessage(m: any): unknown {
+  if (!m || typeof m !== 'object') return m
+  return {
+    id: m.id,
+    body: m.body,
+    targetType: m.targetType,
+    createdAt: m.createdAt,
+    ...(m.senderAgent ? { senderAgent: { name: m.senderAgent.name } } : {}),
+    ...(m.senderUser ? { senderUser: { githubLogin: m.senderUser.githubLogin } } : {}),
+    ...(m.claim
+      ? { claim: { id: m.claim.id, title: m.claim.title, type: m.claim.type, paths: m.claim.paths } }
+      : {}),
+  }
+}
+
+const slimClaimList = (x: unknown): unknown =>
+  Array.isArray(x) ? x.map(slimClaim) : x
+const slimMessageList = (x: unknown): unknown =>
+  Array.isArray(x) ? x.map(slimMessage) : x
+
+function slimAgent(a: any): unknown {
+  if (!a || typeof a !== 'object') return a
+  return { name: a.name, lastSeenAt: a.lastSeenAt }
+}
+
+function slimProject(p: any): unknown {
+  if (!p || typeof p !== 'object') return p
+  // Drop id/ownerId/timestamps and the embedded member roster (emails included)
+  // — the model only needs the project's identity, and list_members covers members.
+  return { name: p.name, repoOwner: p.repoOwner, repoName: p.repoName }
+}
+
+function slimMember(m: any): unknown {
+  if (!m || typeof m !== 'object') return m
+  return {
+    githubLogin: m.githubLogin,
+    role: m.role,
+    // Only surface non-default status (PENDING) — ACTIVE is the common case.
+    ...(m.status && m.status !== 'ACTIVE' ? { status: m.status } : {}),
+    ...(Array.isArray(m.agents) ? { agents: m.agents.map(slimAgent) } : {}),
+  }
+}
+
+type RegisterApi = {
+  registerAgent: (name: string) => Promise<unknown>
+  getProject: () => Promise<unknown>
+  getSync: () => Promise<unknown>
+  join: (code: string) => Promise<{ status?: string }>
+}
+
+/**
+ * Fetch the register_agent bundle, auto-joining on first contact.
+ * A contributor lands here via the repo's committed .dibs/project.json without
+ * being a member yet — on "not a member" we redeem the committed joinCode. If the
+ * project auto-approves, we're in immediately and retry; otherwise a join request
+ * is filed and we report that the owner must approve before they're active.
+ */
+export async function registerWithAutoJoin(
+  api: RegisterApi,
+  agentName: string,
+  joinCode?: string
+): Promise<[unknown, unknown, unknown]> {
+  const fetchBundle = (): Promise<[unknown, unknown, unknown]> =>
+    Promise.all([api.registerAgent(agentName), api.getProject(), api.getSync()])
+
+  try {
+    return await fetchBundle()
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 403 && /not a member/i.test(err.message)) {
+      if (!joinCode) throw err
+      const res = await api.join(joinCode)
+      if (res?.status === 'pending') {
+        // Plain Error: describeError returns its message verbatim (not "API error").
+        throw new Error(
+          'Join request submitted — waiting for the project owner to approve. ' +
+            'You are not active in this project yet; retry register_agent once approved.'
+        )
+      }
+      return await fetchBundle()
+    }
+    throw err
+  }
+}
 
 export function runMcp() {
   const creds = requireCredentials()
@@ -386,43 +490,46 @@ export function runMcp() {
       switch (name) {
         case 'register_agent': {
           // Always authoritative — hits the API and seeds the cache with fresh data.
-          const [agent, project, sync] = await Promise.all([
-            api.registerAgent(agentName),
-            api.getProject(),
-            api.getSync(),
-          ])
+          // Auto-joins the project on first contact (see registerWithAutoJoin).
+          const [agent, project, sync] = await registerWithAutoJoin(api, agentName, proj.joinCode)
           const syncData = sync as SyncData
           memCache = syncData
           writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })
           result = {
-            agent,
-            project,
-            activeClaims: syncData.claims,
-            unreadMessages: syncData.messages,
+            agent: slimAgent(agent),
+            project: slimProject(project),
+            activeClaims: syncData.claims.map(slimClaim),
+            unreadMessages: syncData.messages.map(slimMessage),
           }
           break
         }
         case 'list_members': {
-          result = await api.getMembers()
+          const members = await api.getMembers()
+          result = Array.isArray(members) ? members.map(slimMember) : members
           break
         }
         case 'get_claims': {
           const filterPath = args.path as string | undefined
           if (memCache && !filterPath) {
             // Serve all other-agent claims from cache — no network call.
-            result = memCache.claims
+            result = memCache.claims.map(slimClaim)
           } else if (memCache && filterPath) {
             // Filter in-memory — the cache holds up to 20 other-agent claims.
-            result = memCache.claims.filter(c => c.paths.includes(filterPath))
+            result = memCache.claims.filter(c => c.paths.includes(filterPath)).map(slimClaim)
           } else {
-            result = await api.getClaims(filterPath)
+            result = slimClaimList(await api.getClaims(filterPath))
           }
           break
         }
         case 'create_claim': {
-          result = await api.createClaim(
+          const created = await api.createClaim(
             args as { type: 'FILE' | 'IDEA'; title: string; paths?: string[]; note?: string }
-          )
+          ) as { claim?: unknown; conflicts?: unknown[] }
+          result = {
+            ...created,
+            claim: slimClaim(created.claim),
+            conflicts: (created.conflicts ?? []).map(slimClaim),
+          }
           void pollSync()
           break
         }
@@ -433,12 +540,12 @@ export function runMcp() {
             note?: string
             paths?: string[]
           }
-          result = await api.updateClaim(claimId, rest)
+          result = slimClaim(await api.updateClaim(claimId, rest))
           void pollSync()
           break
         }
         case 'release_claim': {
-          result = await api.releaseClaim((args as { claimId: string }).claimId)
+          result = slimClaim(await api.releaseClaim((args as { claimId: string }).claimId))
           void pollSync()
           break
         }
@@ -458,11 +565,23 @@ export function runMcp() {
           const threadId = (args as { threadId?: string }).threadId
           if (threadId) {
             // Thread fetches always need fresh data from the API.
-            result = await api.getThread(threadId)
+            const thread = await api.getThread(threadId) as
+              | unknown[]
+              | { messages?: unknown[] }
+            result = Array.isArray(thread)
+              ? thread.map(slimMessage)
+              : thread && Array.isArray(thread.messages)
+                ? { ...thread, messages: thread.messages.map(slimMessage) }
+                : thread
           } else if (memCache) {
-            result = { messages: memCache.messages, unread: memCache.unread }
+            result = { messages: memCache.messages.map(slimMessage), unread: memCache.unread }
           } else {
-            result = await api.getMessages()
+            const fetched = await api.getMessages() as unknown
+            result = Array.isArray(fetched)
+              ? fetched.map(slimMessage)
+              : fetched && Array.isArray((fetched as { messages?: unknown[] }).messages)
+                ? { ...(fetched as object), messages: (fetched as { messages: unknown[] }).messages.map(slimMessage) }
+                : fetched
           }
           break
         }
@@ -491,7 +610,7 @@ export function runMcp() {
       }
 
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result) }],
       }
     } catch (err) {
       return {

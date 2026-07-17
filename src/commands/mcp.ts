@@ -371,7 +371,9 @@ export function runMcp() {
   poller.unref()
 
   const server = new Server(
-    { name: 'dibs', version: '0.0.1' },
+    // CLI_VERSION, not a literal — this is what MCP clients see in the handshake,
+    // and a literal here drifts silently the same way `--version` did.
+    { name: 'dibs', version: CLI_VERSION },
     { capabilities: { tools: {} } }
   )
 

@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
+// Single source of truth — a literal here silently drifts from package.json, which
+// is exactly how `dibs --version` came to report 0.0.1 on every release through 0.0.6.
+import { CLI_VERSION } from './lib/version'
 
 const program = new Command()
 
 program
   .name('dibs')
   .description('Coordinate work between AI agents in a shared codebase')
-  .version('0.0.1')
+  .version(CLI_VERSION)
 
 program
   .command('login')

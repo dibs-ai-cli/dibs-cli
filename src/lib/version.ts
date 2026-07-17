@@ -1,5 +1,5 @@
 // Must match the version in package.json — enforced by src/__tests__/version.test.ts.
-export const CLI_VERSION = '0.0.5'
+export const CLI_VERSION = '0.0.6'
 
 export function isOlderThan(a: string, b: string): boolean {
   const parse = (v: string): [number, number, number] => {

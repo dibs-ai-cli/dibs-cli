@@ -4,6 +4,7 @@ import { execSync } from 'child_process'
 import readline from 'readline'
 import { requireCredentials } from '../lib/credentials'
 import { apiCall } from '../lib/api'
+import { MCP_TOOLS } from './mcp'
 
 interface Project {
   id: string
@@ -208,23 +209,18 @@ async function runInitInner() {
   const mcpServers = ((existingMcp.mcpServers ?? {}) as Record<string, unknown>)
   const existingDibs = (mcpServers['dibs'] as Record<string, unknown>) ?? {}
   // Merge so user-added fields (e.g. env vars) survive re-runs of dibs init.
-  // Fields we own (type, command, args, autoApprove) are always overwritten to stay current.
-  mcpServers['dibs'] = {
+  // Fields we own (type, command, args) are always overwritten to stay current.
+  const dibsServer: Record<string, unknown> = {
     ...existingDibs,
     type: 'stdio',
     command: 'dibs',
     args: ['mcp'],
-    autoApprove: [
-      'register_agent',
-      'get_claims',
-      'create_claim',
-      'update_claim',
-      'release_claim',
-      'send_message',
-      'get_messages',
-      'mark_read',
-    ],
   }
+  // Older inits wrote `autoApprove` here. That field belongs to other MCP clients
+  // (Cline/Roo/Windsurf); Claude Code ignores it, so it never suppressed a prompt.
+  // Pre-approval lives in settings.local.json below. Strip it on re-init.
+  delete dibsServer.autoApprove
+  mcpServers['dibs'] = dibsServer
   const mergedMcp = { ...existingMcp, mcpServers }
   const mcpJsonContent = JSON.stringify(mergedMcp, null, 2) + '\n'
 
@@ -257,8 +253,29 @@ async function runInitInner() {
   upsertDibsHook('SessionStart', 'dibs session-start')
   upsertDibsHook('UserPromptSubmit', 'dibs sync')
 
+  // Approve the project-scope MCP server from .mcp.json. Without this Claude Code
+  // shows it as "pending approval" and never starts it. This has to live in
+  // settings.local.json rather than the committed settings.json — Claude Code ignores
+  // it from checked-in settings in an untrusted folder, which a fresh clone always is.
+  const enabledServers = (
+    Array.isArray(existingSettings.enabledMcpjsonServers) ? existingSettings.enabledMcpjsonServers : []
+  ) as string[]
+  if (!enabledServers.includes('dibs')) enabledServers.push('dibs')
+
+  // Pre-approve each dibs tool so coordination calls don't prompt mid-task.
+  // Derived from MCP_TOOLS so the list can't drift from what `dibs mcp` registers.
+  const permissions = ((existingSettings.permissions ?? {}) as Record<string, unknown>)
+  const allow = (Array.isArray(permissions.allow) ? permissions.allow : []) as string[]
+  for (const tool of MCP_TOOLS) {
+    const rule = `mcp__dibs__${tool.name}`
+    if (!allow.includes(rule)) allow.push(rule)
+  }
+  permissions.allow = allow
+
   const mergedSettings = {
     ...existingSettings,
+    enabledMcpjsonServers: enabledServers,
+    permissions,
     hooks,
   }
   const settingsContent = JSON.stringify(mergedSettings, null, 2) + '\n'

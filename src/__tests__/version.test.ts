@@ -1,9 +1,21 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'fs'
+import path from 'path'
 import { CLI_VERSION, isOlderThan } from '../lib/version'
 
 describe('CLI_VERSION', () => {
   it('is a valid semver string', () => {
     expect(CLI_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  // CLI_VERSION is sent as X-Dibs-CLI-Version and compared against the server's
+  // X-Dibs-Min-Version / X-Dibs-Latest-Version. If it drifts from package.json the
+  // server sees a stale version for every user and the upgrade nag never fires.
+  it('matches the version in package.json', () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
+    ) as { version: string }
+    expect(CLI_VERSION).toBe(pkg.version)
   })
 })
 

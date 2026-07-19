@@ -3,7 +3,7 @@ import { execSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { resolveAgentName } from '../lib/agent-name'
+import { resolveAgentName, newSessionId } from '../lib/agent-name'
 
 const originalEnv = { ...process.env }
 const originalCwd = process.cwd()
@@ -24,8 +24,8 @@ describe('resolveAgentName', () => {
   })
 
   it('identifies the working copy, not just the machine', () => {
-    // user@host alone is identical for every session on a machine. Since the API
-    // upserts agents on (projectId, name), that made concurrent agents one agent.
+    // The display label still names the worktree so it reads usefully; uniqueness
+    // between concurrent sessions is the session id's job (see newSessionId).
     expect(resolveAgentName()).toMatch(/^.+@.+:.+$/)
   })
 
@@ -69,5 +69,27 @@ describe('resolveAgentName', () => {
       process.chdir(originalCwd)
       fs.rmSync(tmp, { recursive: true, force: true })
     }
+  })
+})
+
+describe('newSessionId', () => {
+  beforeEach(() => {
+    delete process.env.DIBS_SESSION_ID
+  })
+
+  // The core of the fix: two sessions in the *same* worktree share a display name
+  // but must be distinct agents. resolveAgentName() can't tell them apart; the
+  // session id must.
+  it('mints a distinct id on every call', () => {
+    const a = newSessionId()
+    const b = newSessionId()
+    expect(a).not.toBe(b)
+    expect(a.length).toBeGreaterThan(0)
+  })
+
+  it('lets DIBS_SESSION_ID pin the id (e.g. for tests)', () => {
+    process.env.DIBS_SESSION_ID = 'fixed-session-123'
+    expect(newSessionId()).toBe('fixed-session-123')
+    expect(newSessionId()).toBe('fixed-session-123')
   })
 })

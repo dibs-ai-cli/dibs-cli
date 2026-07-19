@@ -7,9 +7,14 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
       "idempotentHint": true,
       "readOnlyHint": false,
     },
-    "description": "Start a coordination session at the beginning of every work session — call this once before doing anything else. Returns the project name, your agent identity, all currently active claims in the project, and any unread messages addressed to you. Use the returned active claims to understand what other agents are working on before you start, and check unread messages for any coordination requests waiting for you. This call is idempotent: re-running it updates your presence timestamp and returns fresh state without creating duplicates.",
+    "description": "Start a coordination session at the beginning of every work session — call this once before doing anything else. Returns the project name, your agent identity (a stable per-session id plus a display label), all currently active claims in the project, and any unread messages addressed to you. Optionally pass \`label\` to name this session something readable (e.g. what you are working on) — labels need not be unique across sessions because the session id underneath keeps agents distinct. Use the returned active claims to understand what other agents are working on before you start, and check unread messages for any coordination requests waiting for you. This call is idempotent: re-running it updates your presence timestamp (and label, if provided) and returns fresh state without creating duplicates.",
     "inputSchema": {
-      "properties": {},
+      "properties": {
+        "label": {
+          "description": "Optional human-readable display name for this session (e.g. "onboarding-webhook"). Does not need to be unique.",
+          "type": "string",
+        },
+      },
       "type": "object",
     },
     "name": "register_agent",
@@ -160,7 +165,7 @@ exports[`MCP tool surface > matches the full schema snapshot 1`] = `
           "type": "string",
         },
         "targetId": {
-          "description": "For AGENT: the agent's name (from get_claims or register_agent results). For USER: the GitHub login of the human. Omit for BROADCAST.",
+          "description": "For AGENT: the agent's \`id\` (from get_claims, list_members, or register_agent results) — prefer the id over the display name, since names can be shared by concurrent sessions. For USER: the GitHub login of the human. Omit for BROADCAST.",
           "type": "string",
         },
         "targetType": {

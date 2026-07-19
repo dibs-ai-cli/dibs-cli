@@ -1,6 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { execSync } from 'child_process'
+import { randomUUID } from 'crypto'
 
 /**
  * Basename of the git working copy we're running in.
@@ -25,22 +26,16 @@ function worktreeLabel(): string | null {
 }
 
 /**
- * Identity this session presents as, sent as X-Agent-Name on every request.
+ * Human-readable display *label* for this session, sent as X-Agent-Name.
  *
- * The API upserts agents on (projectId, name), so the name *is* the identity —
- * two sessions sharing a name are literally one agent: they can't warn each
- * other about overlap, can't message each other, and either can release the
- * other's claims. `user@host` alone collided for every session on a machine,
- * which broke the one thing dibs exists to do the moment you ran two agents.
+ * This used to be the identity — the API upserted agents on (projectId, name),
+ * so two sessions sharing a name were literally one agent. That collapsed every
+ * concurrent session in one worktree into a single identity: they couldn't warn
+ * each other, couldn't message each other, and a directed message could land on
+ * the wrong session. Identity now lives in a per-session id (see newSessionId),
+ * and this name is just a label — non-unique, for legibility.
  *
- * Deliberately stable rather than random-per-process. A random suffix would give
- * each session a fresh identity, but claims are owned by agent id and the API
- * 403s anyone else's claim — so restarting an agent would strand every claim it
- * still held, with no way to release them. Keying on the working copy keeps an
- * agent's claims across restarts and still tells worktrees apart.
- *
- * DIBS_AGENT_NAME overrides everything, for running two agents in one directory
- * or giving an agent a memorable name.
+ * DIBS_AGENT_NAME overrides it, to give an agent a memorable name.
  */
 export function resolveAgentName(): string {
   if (process.env.DIBS_AGENT_NAME) return process.env.DIBS_AGENT_NAME
@@ -48,4 +43,18 @@ export function resolveAgentName(): string {
   const host = os.hostname()
   const label = worktreeLabel()
   return label ? `${user}@${host}:${label}` : `${user}@${host}`
+}
+
+/**
+ * Uniqueness key for a live MCP session, sent as X-Agent-Session.
+ *
+ * Minted fresh per process and held in memory — the MCP server is 1:1 with a
+ * running agent session, so a new id per process makes concurrent sessions
+ * distinct with zero naming discipline, even in the same worktree. Not
+ * persisted: a restart is a new session, which strands the previous session's
+ * claims (they auto-expire to STALE after 4h). DIBS_SESSION_ID overrides it,
+ * for tests or pinning an identity across restarts.
+ */
+export function newSessionId(): string {
+  return process.env.DIBS_SESSION_ID || randomUUID()
 }

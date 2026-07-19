@@ -8,7 +8,7 @@ import {
 import { requireCredentials } from '../lib/credentials'
 import { requireProject } from '../lib/project'
 import { makeProjectApi, ApiError, getVersionHints } from '../lib/api'
-import { resolveAgentName } from '../lib/agent-name'
+import { resolveAgentName, newSessionId } from '../lib/agent-name'
 import { readCache, writeCache, isFresh, type SyncData } from '../lib/cache'
 import { CLI_VERSION, isOlderThan } from '../lib/version'
 
@@ -80,14 +80,14 @@ function describeError(tool: string, err: unknown): string {
         const forType = message.includes('AGENT') ? 'AGENT' : 'USER'
         const hint =
           forType === 'AGENT'
-            ? 'Set targetId to the agent name (visible in get_claims or register_agent results).'
+            ? 'Set targetId to the agent id (visible in get_claims, list_members, or register_agent results).'
             : 'Set targetId to the GitHub login of the user you want to reach.'
         return `targetId is required when targetType is ${forType}. ${hint}`
       }
       if (status === 404 && message.includes('agent')) {
         return (
-          'No agent with that name exists in this project. ' +
-          'Use get_claims to see active agents and their names, then retry with the correct targetId.'
+          'No agent with that id exists in this project. ' +
+          'Use get_claims or list_members to see active agents, then retry with an agent `id` as targetId.'
         )
       }
       if (status === 404 && message.includes('user')) {
@@ -119,11 +119,21 @@ export const MCP_TOOLS = [
     name: 'register_agent',
     description:
       'Start a coordination session at the beginning of every work session — call this once before doing anything else. ' +
-      'Returns the project name, your agent identity, all currently active claims in the project, and any unread messages addressed to you. ' +
+      'Returns the project name, your agent identity (a stable per-session id plus a display label), all currently active claims in the project, and any unread messages addressed to you. ' +
+      'Optionally pass `label` to name this session something readable (e.g. what you are working on) — labels need not be unique across sessions because the session id underneath keeps agents distinct. ' +
       'Use the returned active claims to understand what other agents are working on before you start, and check unread messages for any coordination requests waiting for you. ' +
-      'This call is idempotent: re-running it updates your presence timestamp and returns fresh state without creating duplicates.',
+      'This call is idempotent: re-running it updates your presence timestamp (and label, if provided) and returns fresh state without creating duplicates.',
     annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        label: {
+          type: 'string',
+          description:
+            'Optional human-readable display name for this session (e.g. "onboarding-webhook"). Does not need to be unique.',
+        },
+      },
+    },
   },
   {
     name: 'list_members',
@@ -263,7 +273,7 @@ export const MCP_TOOLS = [
         targetId: {
           type: 'string',
           description:
-            'For AGENT: the agent\'s name (from get_claims or register_agent results). For USER: the GitHub login of the human. Omit for BROADCAST.',
+            'For AGENT: the agent\'s `id` (from get_claims, list_members, or register_agent results) — prefer the id over the display name, since names can be shared by concurrent sessions. For USER: the GitHub login of the human. Omit for BROADCAST.',
         },
         body: {
           type: 'string',
@@ -326,9 +336,15 @@ export function runMcp() {
   const creds = requireCredentials()
   const proj = requireProject()
 
-  const agentName = resolveAgentName()
+  // Identity is the per-session id; agentLabel is only a display name and may be
+  // renamed via register_agent. The disk cache is a worktree-level heads-up
+  // shared with the session-start/sync hooks, so it's keyed on the stable
+  // worktree label (cacheKey), independent of both.
+  const sessionId = newSessionId()
+  let agentLabel = resolveAgentName()
+  const cacheKey = resolveAgentName()
 
-  const api = makeProjectApi(proj.projectId, creds.token, agentName)
+  let api = makeProjectApi(proj.projectId, creds.token, agentLabel, sessionId)
 
   // --- In-memory cache ---
   // Seeded by register_agent and kept fresh by the background poll.
@@ -345,7 +361,7 @@ export function runMcp() {
     try {
       const data = await api.getSync() as SyncData
       memCache = data
-      writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data })
+      writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data })
 
       if (!versionChecked) {
         versionChecked = true
@@ -363,7 +379,7 @@ export function runMcp() {
 
   // Seed from disk if a fresh cache already exists for this same identity
   // (e.g. a hook or a prior run of this agent wrote it).
-  const existing = readCache(proj.projectId, agentName)
+  const existing = readCache(proj.projectId, cacheKey)
   if (existing && isFresh(existing)) memCache = existing.data
 
   // Start background polling; .unref() so the interval doesn't prevent clean exit
@@ -387,15 +403,22 @@ export function runMcp() {
 
       switch (name) {
         case 'register_agent': {
+          // Optional display label — lets an agent name itself something readable
+          // (e.g. its current task). Identity stays the per-session id underneath.
+          const label = (args as { label?: string }).label
+          if (typeof label === 'string' && label.trim()) {
+            agentLabel = label.trim()
+            api = makeProjectApi(proj.projectId, creds.token, agentLabel, sessionId)
+          }
           // Always authoritative — hits the API and seeds the cache with fresh data.
           const [agent, project, sync] = await Promise.all([
-            api.registerAgent(agentName),
+            api.registerAgent(agentLabel),
             api.getProject(),
             api.getSync(),
           ])
           const syncData = sync as SyncData
           memCache = syncData
-          writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })
+          writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data: syncData })
           result = {
             agent,
             project,
@@ -481,7 +504,7 @@ export function runMcp() {
               messages: remaining,
               unread: Math.max(0, memCache.unread - (memCache.messages.length - remaining.length)),
             }
-            writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: memCache })
+            writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data: memCache })
           }
           break
         }
@@ -507,7 +530,7 @@ export function runMcp() {
     const transport = new StdioServerTransport()
     await server.connect(transport)
     console.error(
-      `dibs MCP server connected (project=${proj.projectId}, agent=${agentName})`
+      `dibs MCP server connected (project=${proj.projectId}, agent=${agentLabel}, session=${sessionId.slice(0, 8)})`
     )
   }
 

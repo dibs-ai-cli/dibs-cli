@@ -14,12 +14,10 @@ export async function runSessionStart() {
   const agentName = resolveAgentName()
 
   let messages: SyncData['messages']
-  let unread: number
 
   const cached = readCache(proj.projectId, agentName)
   if (cached && isFresh(cached)) {
     messages = cached.data.messages
-    unread = cached.data.unread
   } else {
     try {
       const result = await apiCall<{ messages: SyncData['messages']; unread: number }>(
@@ -29,7 +27,6 @@ export async function runSessionStart() {
         { token: creds.token, agentName }
       )
       messages = result.messages
-      unread = result.unread
     } catch {
       return
     }
@@ -37,8 +34,14 @@ export async function runSessionStart() {
 
   if (!messages || messages.length === 0) return
 
-  process.stderr.write(`[dibs] ${unread} unread message${unread === 1 ? '' : 's'} in project ${proj.projectId}:\n`)
-  for (const msg of messages) {
+  // Only messages addressed to the human belong in the human's terminal.
+  // Agent-to-agent coordination (AGENT/BROADCAST) is handled by the agents
+  // themselves — surfacing it here is exactly the noise we want to avoid.
+  const forUser = messages.filter((m) => m.targetType === 'USER')
+  if (forUser.length === 0) return
+
+  process.stderr.write(`[dibs] ${forUser.length} message${forUser.length === 1 ? '' : 's'} for you in project ${proj.projectId}:\n`)
+  for (const msg of forUser) {
     const sender = msg.senderAgent?.name ?? msg.senderUser?.githubLogin ?? 'unknown'
     const preview = msg.body.length > 80 ? msg.body.slice(0, 77) + '...' : msg.body
     process.stderr.write(`  - ${sender}: "${preview}"\n`)

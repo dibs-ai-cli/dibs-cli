@@ -24,7 +24,7 @@ export async function apiCall<T = unknown>(
   method: string,
   urlPath: string,
   body?: unknown,
-  options: { token?: string; agentName?: string } = {}
+  options: { token?: string; agentName?: string; sessionId?: string } = {}
 ): Promise<T> {
   const creds = options.token ? null : readCredentials()
   const token = options.token ?? creds?.token
@@ -38,6 +38,12 @@ export async function apiCall<T = unknown>(
   }
   if (options.agentName) {
     headers['X-Agent-Name'] = options.agentName
+  }
+  // Per-session identity. Present it and the server tells concurrent sessions
+  // apart even when they share a display name; absent (hooks, older callers) the
+  // server falls back to the name. See apps/api/src/lib/agent-identity.ts.
+  if (options.sessionId) {
+    headers['X-Agent-Session'] = options.sessionId
   }
 
   const res = await fetch(`${getApiUrl()}${urlPath}`, {
@@ -81,10 +87,11 @@ export async function createInvite(
 export function makeProjectApi(
   projectId: string,
   token: string,
-  agentName: string
+  agentName: string,
+  sessionId?: string
 ) {
   const projectBase = `/projects/${projectId}`
-  const opts = { token, agentName }
+  const opts = { token, agentName, sessionId }
 
   return {
     registerAgent: (name: string) =>

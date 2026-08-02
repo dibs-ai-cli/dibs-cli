@@ -8,7 +8,7 @@ import {
 import { requireCredentials } from '../lib/credentials'
 import { requireProject } from '../lib/project'
 import { makeProjectApi, ApiError, getVersionHints } from '../lib/api'
-import { resolveAgentName } from '../lib/agent-name'
+import { resolveAgentName, newSessionId } from '../lib/agent-name'
 import { readCache, writeCache, isFresh, type SyncData } from '../lib/cache'
 import { CLI_VERSION, isOlderThan } from '../lib/version'
 
@@ -33,6 +33,7 @@ function describeError(tool: string, err: unknown): string {
       'Run `dibs login` in your terminal to re-authenticate, then restart this Claude Code session.'
     )
   }
+  // Case-insensitive: the server capitalizes ("Not a member of this project").
   if (status === 403 && /not a member/i.test(message)) {
     return (
       'You are not a member of this project. ' +
@@ -80,14 +81,14 @@ function describeError(tool: string, err: unknown): string {
         const forType = message.includes('AGENT') ? 'AGENT' : 'USER'
         const hint =
           forType === 'AGENT'
-            ? 'Set targetId to the agent name (visible in get_claims or register_agent results).'
+            ? 'Set targetId to the agent id (visible in get_claims, list_members, or register_agent results).'
             : 'Set targetId to the GitHub login of the user you want to reach.'
         return `targetId is required when targetType is ${forType}. ${hint}`
       }
       if (status === 404 && message.includes('agent')) {
         return (
-          'No agent with that name exists in this project. ' +
-          'Use get_claims to see active agents and their names, then retry with the correct targetId.'
+          'No agent with that id exists in this project. ' +
+          'Use get_claims or list_members to see active agents, then retry with an agent `id` as targetId.'
         )
       }
       if (status === 404 && message.includes('user')) {
@@ -119,18 +120,28 @@ export const MCP_TOOLS = [
     name: 'register_agent',
     description:
       'Call once at the start of a work session, before anything else. ' +
-      'Returns the project, your agent identity, all active claims, and unread messages addressed to you — ' +
+      'Returns the project, your agent identity (a per-session id plus a display label), all active claims, and unread messages addressed to you — ' +
       'review the claims to see what others are working on, and check messages for coordination requests. ' +
-      'Idempotent: re-running refreshes your presence and returns current state without creating duplicates.',
+      'Optionally pass `label` to give this session a readable name; labels need not be unique, the session id underneath keeps agents distinct. ' +
+      'Idempotent: re-running refreshes your presence (and label, if provided) and returns current state without creating duplicates.',
     annotations: { readOnlyHint: false, idempotentHint: true },
-    inputSchema: { type: 'object', properties: {} },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        label: {
+          type: 'string',
+          description:
+            'Optional human-readable display name for this session (e.g. "onboarding-webhook"). Does not need to be unique.',
+        },
+      },
+    },
   },
   {
     name: 'list_members',
     description:
       'List everyone with access to this project and their running agent sessions — each member\'s GitHub login, ' +
-      'role (OWNER or MEMBER), and registered agents (name + lastSeenAt). ' +
-      'Use it to find an agent name before messaging, or to see who is online. ' +
+      'role (OWNER or MEMBER), and registered agents (id + name + lastSeenAt). ' +
+      'Use it to find an agent id before messaging, or to see who is online. ' +
       'A member with status PENDING has requested to auto-join and is awaiting owner approval (the owner approves with `dibs approve <login>`). ' +
       'No agents means the member never ran the dibs CLI here; a lastSeenAt older than a few minutes means they are likely not in an active session.',
     annotations: { readOnlyHint: true },
@@ -262,7 +273,7 @@ export const MCP_TOOLS = [
         targetId: {
           type: 'string',
           description:
-            'For AGENT: the agent\'s name (from get_claims or register_agent results). For USER: the GitHub login of the human. Omit for BROADCAST.',
+            'For AGENT: the agent\'s `id` (from get_claims, list_members, or register_agent results) — prefer the id over the display name, since names can be shared by concurrent sessions. For USER: the GitHub login of the human. Omit for BROADCAST.',
         },
         body: {
           type: 'string',
@@ -326,6 +337,8 @@ export const MCP_TOOLS = [
 // createdAt, expiresAt, …). MCP tool results stay in the model's context for the
 // rest of the session, so every redundant field is paid for on every later turn.
 // Project results down to the fields the model actually uses before returning.
+// Agent objects keep their `id` — it's the targetId for send_message, since
+// display names can be shared by concurrent sessions.
 
 function slimClaim(c: any): unknown {
   if (!c || typeof c !== 'object') return c
@@ -337,7 +350,7 @@ function slimClaim(c: any): unknown {
     status: c.status,
     ...(c.note != null ? { note: c.note } : {}),
     updatedAt: c.updatedAt,
-    ...(c.agent ? { agent: { name: c.agent.name } } : {}),
+    ...(c.agent ? { agent: { id: c.agent.id, name: c.agent.name } } : {}),
     ...(c.user ? { user: { githubLogin: c.user.githubLogin } } : {}),
   }
 }
@@ -349,7 +362,7 @@ function slimMessage(m: any): unknown {
     body: m.body,
     targetType: m.targetType,
     createdAt: m.createdAt,
-    ...(m.senderAgent ? { senderAgent: { name: m.senderAgent.name } } : {}),
+    ...(m.senderAgent ? { senderAgent: { id: m.senderAgent.id, name: m.senderAgent.name } } : {}),
     ...(m.senderUser ? { senderUser: { githubLogin: m.senderUser.githubLogin } } : {}),
     ...(m.claim
       ? { claim: { id: m.claim.id, title: m.claim.title, type: m.claim.type, paths: m.claim.paths } }
@@ -364,7 +377,7 @@ const slimMessageList = (x: unknown): unknown =>
 
 function slimAgent(a: any): unknown {
   if (!a || typeof a !== 'object') return a
-  return { name: a.name, lastSeenAt: a.lastSeenAt }
+  return { id: a.id, name: a.name, lastSeenAt: a.lastSeenAt }
 }
 
 function slimProject(p: any): unknown {
@@ -430,9 +443,15 @@ export function runMcp() {
   const creds = requireCredentials()
   const proj = requireProject()
 
-  const agentName = resolveAgentName()
+  // Identity is the per-session id; agentLabel is only a display name and may be
+  // renamed via register_agent. The disk cache is a worktree-level heads-up
+  // shared with the session-start/sync hooks, so it's keyed on the stable
+  // worktree label (cacheKey), independent of both.
+  const sessionId = newSessionId()
+  let agentLabel = resolveAgentName()
+  const cacheKey = resolveAgentName()
 
-  const api = makeProjectApi(proj.projectId, creds.token, agentName)
+  let api = makeProjectApi(proj.projectId, creds.token, agentLabel, sessionId)
 
   // --- In-memory cache ---
   // Seeded by register_agent and kept fresh by the background poll.
@@ -449,7 +468,7 @@ export function runMcp() {
     try {
       const data = await api.getSync() as SyncData
       memCache = data
-      writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data })
+      writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data })
 
       if (!versionChecked) {
         versionChecked = true
@@ -467,7 +486,7 @@ export function runMcp() {
 
   // Seed from disk if a fresh cache already exists for this same identity
   // (e.g. a hook or a prior run of this agent wrote it).
-  const existing = readCache(proj.projectId, agentName)
+  const existing = readCache(proj.projectId, cacheKey)
   if (existing && isFresh(existing)) memCache = existing.data
 
   // Start background polling; .unref() so the interval doesn't prevent clean exit
@@ -475,7 +494,9 @@ export function runMcp() {
   poller.unref()
 
   const server = new Server(
-    { name: 'dibs', version: '0.0.1' },
+    // CLI_VERSION, not a literal — this is what MCP clients see in the handshake,
+    // and a literal here drifts silently the same way `--version` did.
+    { name: 'dibs', version: CLI_VERSION },
     { capabilities: { tools: {} } }
   )
 
@@ -489,12 +510,19 @@ export function runMcp() {
 
       switch (name) {
         case 'register_agent': {
+          // Optional display label — lets an agent name itself something readable
+          // (e.g. its current task). Identity stays the per-session id underneath.
+          const label = (args as { label?: string }).label
+          if (typeof label === 'string' && label.trim()) {
+            agentLabel = label.trim()
+            api = makeProjectApi(proj.projectId, creds.token, agentLabel, sessionId)
+          }
           // Always authoritative — hits the API and seeds the cache with fresh data.
           // Auto-joins the project on first contact (see registerWithAutoJoin).
-          const [agent, project, sync] = await registerWithAutoJoin(api, agentName, proj.joinCode)
+          const [agent, project, sync] = await registerWithAutoJoin(api, agentLabel, proj.joinCode)
           const syncData = sync as SyncData
           memCache = syncData
-          writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: syncData })
+          writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data: syncData })
           result = {
             agent: slimAgent(agent),
             project: slimProject(project),
@@ -598,7 +626,7 @@ export function runMcp() {
               messages: remaining,
               unread: Math.max(0, memCache.unread - (memCache.messages.length - remaining.length)),
             }
-            writeCache({ projectId: proj.projectId, agentName, fetchedAt: Date.now(), data: memCache })
+            writeCache({ projectId: proj.projectId, agentName: cacheKey, fetchedAt: Date.now(), data: memCache })
           }
           break
         }
@@ -624,7 +652,7 @@ export function runMcp() {
     const transport = new StdioServerTransport()
     await server.connect(transport)
     console.error(
-      `dibs MCP server connected (project=${proj.projectId}, agent=${agentName})`
+      `dibs MCP server connected (project=${proj.projectId}, agent=${agentLabel}, session=${sessionId.slice(0, 8)})`
     )
   }
 

@@ -1,60 +1,95 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { execSync } from 'child_process'
+import fs from 'fs'
 import os from 'os'
-import { resolveAgentName } from '../lib/agent-name'
+import path from 'path'
+import { resolveAgentName, newSessionId } from '../lib/agent-name'
 
-const HOST = os.hostname()
-const USER = process.env.USER ?? process.env.USERNAME ?? 'agent'
-
-beforeEach(() => {
-  vi.unstubAllEnvs()
-  vi.stubEnv('DIBS_AGENT_NAME', '')
-  vi.stubEnv('DIBS_SESSION_NAME', '')
-  vi.stubEnv('CLAUDE_CODE_SESSION_ID', '')
-})
+const originalEnv = { ...process.env }
+const originalCwd = process.cwd()
 
 afterEach(() => {
-  vi.unstubAllEnvs()
+  process.env = { ...originalEnv }
+  process.chdir(originalCwd)
 })
 
-describe('resolveAgentName per-session identity', () => {
-  it('two sessions on one machine register as distinct agents', () => {
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '1b5cdc78-40b1-4864-aae1-836ec8190a37')
-    const sessionA = resolveAgentName()
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '9f0e1d2c-3b4a-5968-8776-655443322110')
-    const sessionB = resolveAgentName()
-    expect(sessionA).not.toBe(sessionB)
+describe('resolveAgentName', () => {
+  beforeEach(() => {
+    delete process.env.DIBS_AGENT_NAME
   })
 
-  it('all processes of one session (MCP server, hooks) compute the same name', () => {
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '1b5cdc78-40b1-4864-aae1-836ec8190a37')
-    expect(resolveAgentName()).toBe(resolveAgentName())
-    expect(resolveAgentName()).toBe(`${USER}@${HOST}/1b5cdc78`)
+  it('lets DIBS_AGENT_NAME override everything', () => {
+    process.env.DIBS_AGENT_NAME = 'reviewer-bot'
+    expect(resolveAgentName()).toBe('reviewer-bot')
   })
 
-  it('keeps the user@host grouping prefix', () => {
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '1b5cdc78-40b1-4864-aae1-836ec8190a37')
-    expect(resolveAgentName().startsWith(`${USER}@${HOST}/`)).toBe(true)
+  it('identifies the working copy, not just the machine', () => {
+    // The display label still names the worktree so it reads usefully; uniqueness
+    // between concurrent sessions is the session id's job (see newSessionId).
+    expect(resolveAgentName()).toMatch(/^.+@.+:.+$/)
   })
 
-  it('DIBS_SESSION_NAME gives a readable label and wins over the session id', () => {
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '1b5cdc78-40b1-4864-aae1-836ec8190a37')
-    vi.stubEnv('DIBS_SESSION_NAME', 'sprooster-copy')
-    expect(resolveAgentName()).toBe(`${USER}@${HOST}/sprooster-copy`)
+  // The regression that matters: two worktrees of one repo, both on this machine,
+  // as the same OS user. This is the normal way to run several agents at once, and
+  // it has to produce two identities or they cannot coordinate at all.
+  it('gives two worktrees of the same repo distinct identities', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dibs-agent-name-'))
+    const run = (cmd: string, cwd: string) =>
+      execSync(cmd, { cwd, stdio: ['ignore', 'pipe', 'ignore'] })
+
+    try {
+      const main = path.join(tmp, 'main-checkout')
+      fs.mkdirSync(main)
+      run('git init -q', main)
+      run('git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init', main)
+
+      const linked = path.join(tmp, 'feature-worktree')
+      run(`git worktree add -q --detach "${linked}"`, main)
+
+      process.chdir(main)
+      const mainAgent = resolveAgentName()
+      process.chdir(linked)
+      const linkedAgent = resolveAgentName()
+
+      expect(mainAgent).not.toBe(linkedAgent)
+      expect(mainAgent).toContain('main-checkout')
+      expect(linkedAgent).toContain('feature-worktree')
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 
-  it('sanitizes labels for the X-Agent-Name header and cache filename', () => {
-    vi.stubEnv('DIBS_SESSION_NAME', 'my label\r\nX-Evil: 1')
-    const name = resolveAgentName()
-    expect(name).toBe(`${USER}@${HOST}/my-label--X-Evil--1`)
+  it('still returns a usable name outside a git repo', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dibs-no-git-'))
+    try {
+      process.chdir(tmp)
+      expect(resolveAgentName()).toMatch(/^.+@.+$/)
+    } finally {
+      process.chdir(originalCwd)
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('newSessionId', () => {
+  beforeEach(() => {
+    delete process.env.DIBS_SESSION_ID
   })
 
-  it('no session info → unchanged legacy identity (compat with existing agent rows)', () => {
-    expect(resolveAgentName()).toBe(`${USER}@${HOST}`)
+  // The core of the fix: two sessions in the *same* worktree share a display name
+  // but must be distinct agents. resolveAgentName() can't tell them apart; the
+  // session id must.
+  it('mints a distinct id on every call', () => {
+    const a = newSessionId()
+    const b = newSessionId()
+    expect(a).not.toBe(b)
+    expect(a.length).toBeGreaterThan(0)
   })
 
-  it('DIBS_AGENT_NAME overrides everything, unchanged', () => {
-    vi.stubEnv('DIBS_AGENT_NAME', 'custom-agent')
-    vi.stubEnv('CLAUDE_CODE_SESSION_ID', '1b5cdc78-40b1-4864-aae1-836ec8190a37')
-    expect(resolveAgentName()).toBe('custom-agent')
+  it('lets DIBS_SESSION_ID pin the id (e.g. for tests)', () => {
+    process.env.DIBS_SESSION_ID = 'fixed-session-123'
+    expect(newSessionId()).toBe('fixed-session-123')
+    expect(newSessionId()).toBe('fixed-session-123')
   })
 })
